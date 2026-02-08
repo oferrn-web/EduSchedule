@@ -472,3 +472,49 @@ button {
   color: var(--muted);
   text-align: center;
 }
+@media (max-width: 768px) {
+  /* Mobile layout for the assignments table only */
+  .table-wrapper-assignments {
+    border-radius: 0;
+    border: none;
+    overflow-x: visible;
+  }
+
+  .data-table-assignments thead {
+    display: none;
+  }
+
+  .data-table-assignments,
+  .data-table-assignments tbody,
+  .data-table-assignments tr,
+  .data-table-assignments td {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table-assignments tr {
+    margin-bottom: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: rgba(15, 23, 42, 0.96);
+    padding: 8px 10px;
+  }
+
+  .data-table-assignments td {
+    padding: 4px 0;
+    border: none;
+  }
+
+  .data-table-assignments td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+
+  .data-table-assignments .icon-cell {
+    text-align: left;
+    margin-top: 4px;
+  }
+}
