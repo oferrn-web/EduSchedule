@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { CalendarCheck2, Clock3, Download, Plus, Trash2, Settings2 } from "lucide-react";
 import "./App.css";
 
@@ -1090,8 +1090,8 @@ const App: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="table-wrapper">
-                  <table className="data-table">
+                <div className="table-wrapper table-wrapper-assignments">
+                  <table className="data-table data-table-assignments">
                     <thead>
                       <tr>
                         <th>קורס</th>
@@ -1106,7 +1106,7 @@ const App: React.FC = () => {
                     <tbody>
                       {assignments.map((row) => (
                         <tr key={row.id}>
-                          <td>
+                          <td data-label="קורס">
                             <input
                               value={row.course}
                               onChange={(e) =>
@@ -1114,7 +1114,7 @@ const App: React.FC = () => {
                               }
                             />
                           </td>
-                          <td>
+                          <td data-label="מטלה">
                             <input
                               value={row.title}
                               onChange={(e) =>
@@ -1122,7 +1122,7 @@ const App: React.FC = () => {
                               }
                             />
                           </td>
-                          <td>
+                          <td data-label="דדליין">
                             <input
                               type="date"
                               value={row.deadline}
@@ -1131,7 +1131,7 @@ const App: React.FC = () => {
                               }
                             />
                           </td>
-                          <td className="narrow">
+                          <td data-label="שעות" className="narrow">
                             <input
                               type="number"
                               min={0}
@@ -1144,7 +1144,7 @@ const App: React.FC = () => {
                               }
                             />
                           </td>
-                          <td className="narrow">
+                          <td data-label="עדיפות" className="narrow">
                             <select
                               value={row.priority}
                               onChange={(e) =>
@@ -1160,7 +1160,7 @@ const App: React.FC = () => {
                               ))}
                             </select>
                           </td>
-                          <td>
+                          <td data-label="הערות / תתי משימות">
                             <textarea
                               value={row.notes}
                               onChange={(e) =>
@@ -1171,7 +1171,7 @@ const App: React.FC = () => {
                               }
                             />
                           </td>
-                          <td className="icon-cell">
+                          <td data-label="פעולות" className="icon-cell">
                             <button
                               type="button"
                               className="danger-icon"
