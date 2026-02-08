@@ -1,0 +1,46 @@
+﻿# Tests
+
+## Test 1 - Welcome gate to wizard [sanity]
+Viewport: mobile
+Description: Ensure intro card shows and start button reveals the 4-step wizard.
+
+Steps:
+1. Navigate to the app.
+2. Verify the welcome card text and the "בואו נתחיל" button are visible.
+3. Tap "בואו נתחיל".
+4. Confirm the stepper with steps "הגדרות" through "לו״ז וייצוא" appears and step 1 is active.
+
+Expected: Intro hides and the wizard with RTL stepper is displayed starting at step 1.
+
+## Test 2 - Missing assignment validation
+Viewport: desktop
+Description: Generating without assignments should show an error.
+
+Steps:
+1. From step 1 keep defaults, go to step 2.
+2. Ensure the assignments table is empty (remove rows if present).
+3. Go to step 4 and click "יצירת לו״ז".
+
+Expected: Error banner appears: requires at least one assignment with title, deadline, and hours; no events table rows are generated.
+
+## Test 3 - Schedule generation and approval
+Viewport: desktop
+Description: Creates a schedule with one assignment and approves it.
+
+Steps:
+1. In step 2 add an assignment with title "מטלה 1", deadline today+2, hours 2, priority 3.
+2. Go to step 4 and click "יצירת לו״ז".
+3. Click "אישור הלו"ז".
+
+Expected: Events table shows at least one "מטלה" row; summary shows events >0; approval button becomes disabled and download button becomes enabled.
+
+## Test 4 - ICS download label update
+Viewport: mobile
+Description: After downloading, regenerating updates the download label.
+
+Steps:
+1. After Test 3 approval, tap "הורדת קובץ .ics" to download.
+2. Change block length in step 1 (e.g., 40), return to step 4 and regenerate.
+3. Approve again.
+
+Expected: Download button label reads "הורדת קובץ .ics מעודכן" and is enabled; clicking downloads again.
