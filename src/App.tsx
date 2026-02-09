@@ -103,6 +103,37 @@ function dateKey(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
+function normalizeDateString(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  // yyyy-mm-dd (already in HTML date format)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // dd.mm.yyyy or dd/mm/yyyy
+  const m = trimmed.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  if (m) {
+    const d = m[1].padStart(2, "0");
+    const mo = m[2].padStart(2, "0");
+    const y = m[3];
+    return `${y}-${mo}-${d}`;
+  }
+
+  // dd-mm-yyyy
+  const m2 = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (m2) {
+    const d = m2[1].padStart(2, "0");
+    const mo = m2[2].padStart(2, "0");
+    const y = m2[3];
+    return `${y}-${mo}-${d}`;
+  }
+
+  // Unknown format
+  return null;
+}
+
 function cloneDateOnly(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 }
@@ -303,7 +334,10 @@ function generateSchedule(
         nextSubIndex: 0,
       };
     })
-    .filter((a) => !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0);
+    .filter(
+      (a) =>
+        !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0
+    );
 
   if (!tasks.length) {
     return { events: [], unscheduled: [] };
@@ -321,7 +355,9 @@ function generateSchedule(
   });
 
   const startDateObj = cloneDateOnly(
-    settings.startDate ? new Date(settings.startDate + "T00:00:00") : new Date()
+    settings.startDate
+      ? new Date(settings.startDate + "T00:00:00")
+      : new Date()
   );
 
   let maxDeadline = cloneDateOnly(tasks[0].deadlineDate);
@@ -332,22 +368,33 @@ function generateSchedule(
 
   const dailyMaxMinutes = Math.round(settings.dailyMaxHours * 60);
   const maxTaskMinutesPerDay = Math.round(settings.maxTaskHoursPerDay * 60);
-  const blockMinutes = Math.max(15, Math.min(240, Math.round(settings.blockMinutes)));
+  const blockMinutes = Math.max(
+    15,
+    Math.min(240, Math.round(settings.blockMinutes))
+  );
   const breakMinutes = Math.max(0, Math.min(60, Math.round(settings.breakMinutes)));
   const bufferMinutes = Math.max(0, Math.round(settings.bufferHours * 60));
 
   const ratio = getLoadRatio(settings.loadMode || "medium");
-  const effectiveDailyMinutes = Math.max(30, Math.round(dailyMaxMinutes * ratio));
-  const effectiveTaskMinutesPerDay = Math.max(15, Math.round(maxTaskMinutesPerDay * ratio));
+  const effectiveDailyMinutes = Math.max(
+    30,
+    Math.round(dailyMaxMinutes * ratio)
+  );
+  const effectiveTaskMinutesPerDay = Math.max(
+    15,
+    Math.round(maxTaskMinutesPerDay * ratio)
+  );
 
   const events: ScheduledEvent[] = [];
   const perDayStudyMinutes: Record<string, number> = {};
   const perTaskPerDayMinutes: Record<string, number> = {};
 
   function addStudyMinutes(dayKey: string, taskId: string, minutes: number) {
-    perDayStudyMinutes[dayKey] = (perDayStudyMinutes[dayKey] || 0) + minutes;
+    perDayStudyMinutes[dayKey] =
+      (perDayStudyMinutes[dayKey] || 0) + minutes;
     const key = `${taskId}__${dayKey}`;
-    perTaskPerDayMinutes[key] = (perTaskPerDayMinutes[key] || 0) + minutes;
+    perTaskPerDayMinutes[key] =
+      (perTaskPerDayMinutes[key] || 0) + minutes;
   }
 
   function getStudyMinutes(dayKey: string): number {
@@ -370,12 +417,28 @@ function generateSchedule(
     specificByDate[o.date].push(o);
   });
 
-  const workStartMinutes = parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
-  const workEndMinutes = parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
+  const workStartMinutes =
+    parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
+  const workEndMinutes =
+    parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
   const workingWeek = new Set(settings.workingWeekdays);
 
   const dayCount =
-    Math.round((maxDeadline.getTime() - startDateObj.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    Math.round(
+      (maxDeadline.getTime() - startDateObj.getTime()) /
+        (24 * 60 * 60 * 1000)
+    ) + 1;
+
+  // count how many working days exist in the whole range
+  let totalWorkingDays = 0;
+  for (let offset = 0; offset < dayCount; offset += 1) {
+    const tmpDate = new Date(startDateObj);
+    tmpDate.setDate(startDateObj.getDate() + offset);
+    if (workingWeek.has(tmpDate.getDay())) {
+      totalWorkingDays += 1;
+    }
+  }
+  let workingDayIndex = 0;
 
   for (let offset = 0; offset < dayCount; offset += 1) {
     const currentDate = new Date(startDateObj);
@@ -397,8 +460,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ שבועי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ שבועי קבוע",
           course: undefined,
         });
@@ -415,8 +482,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ בתאריך",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ חד פעמי",
           course: undefined,
         });
@@ -434,8 +505,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ יומי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ יומי קבוע",
           course: undefined,
         });
@@ -443,6 +518,31 @@ function generateSchedule(
     });
 
     if (!workingWeek.has(weekday)) continue;
+
+    // dynamic daily budget based on remaining work and remaining working days
+    const remainingMinutesAll = tasks.reduce(
+      (sum, t) => sum + t.remainingMinutes,
+      0
+    );
+    if (remainingMinutesAll <= 0) break;
+
+    const remainingWorkingDays = totalWorkingDays - workingDayIndex;
+    if (remainingWorkingDays <= 0) break;
+
+    const idealPerDay = remainingMinutesAll / remainingWorkingDays;
+
+    const mode = settings.loadMode || "medium";
+    const spreadMultiplier =
+      mode === "relaxed" ? 0.8 : mode === "marathon" ? 1.3 : 1.0;
+
+    let dailyBudgetMinutes = Math.floor(
+      Math.min(effectiveDailyMinutes, idealPerDay * spreadMultiplier)
+    );
+    if (dailyBudgetMinutes < blockMinutes) {
+      dailyBudgetMinutes = blockMinutes;
+    }
+
+    workingDayIndex += 1;
 
     let windows: Array<[number, number]> = [];
     if (workEndMinutes > workStartMinutes) {
@@ -491,7 +591,7 @@ function generateSchedule(
         const baseBlock = Math.min(blockMinutes, remainingWindowMinutes);
 
         const dayStudiedNow = getStudyMinutes(dKey);
-        if (dayStudiedNow >= effectiveDailyMinutes) break;
+        if (dayStudiedNow >= dailyBudgetMinutes) break;
 
         const candidateIndices: number[] = [];
         for (let i = 0; i < tasks.length; i += 1) {
@@ -499,7 +599,7 @@ function generateSchedule(
           if (t.remainingMinutes <= 0) continue;
 
           const dayStudied = getStudyMinutes(dKey);
-          if (dayStudied >= effectiveDailyMinutes) continue;
+          if (dayStudied >= dailyBudgetMinutes) continue;
 
           const taskDayStudied = getTaskDayMinutes(t.id, dKey);
           if (taskDayStudied >= effectiveTaskMinutesPerDay) continue;
@@ -507,8 +607,12 @@ function generateSchedule(
           const allocCandidate = Math.min(baseBlock, t.remainingMinutes);
           if (allocCandidate < 10) continue;
 
-          if (dayStudied + allocCandidate > effectiveDailyMinutes) continue;
-          if (taskDayStudied + allocCandidate > effectiveTaskMinutesPerDay) continue;
+          if (dayStudied + allocCandidate > dailyBudgetMinutes) continue;
+          if (
+            taskDayStudied + allocCandidate >
+            effectiveTaskMinutesPerDay
+          )
+            continue;
 
           const slotEndDtCandidate = buildLocalDateTime(
             currentDate,
@@ -517,7 +621,11 @@ function generateSchedule(
           const deadlineWithBuffer = new Date(
             t.deadlineDate.getTime() - bufferMinutes * 60 * 1000
           );
-          if (slotEndDtCandidate.getTime() > deadlineWithBuffer.getTime()) continue;
+          if (
+            slotEndDtCandidate.getTime() >
+            deadlineWithBuffer.getTime()
+          )
+            continue;
 
           candidateIndices.push(i);
         }
@@ -527,13 +635,17 @@ function generateSchedule(
         // urgency + priority + remaining work + diversity
         const scored = candidateIndices.map((idx) => {
           const t = tasks[idx];
-          const msDiff = t.deadlineDate.getTime() - currentDate.getTime();
+          const msDiff =
+            t.deadlineDate.getTime() - currentDate.getTime();
           const daysDiff = msDiff / (1000 * 60 * 60 * 24);
-          const urgency = daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
+          const urgency =
+            daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
           const priorityScore = t.priority;
           const remainingBlocks = t.remainingMinutes / blockMinutes;
-          const scoreBase = urgency * 2 + priorityScore + remainingBlocks * 0.1;
-          const diversityPenalty = lastTaskIdForDay && t.id === lastTaskIdForDay ? 0.5 : 1;
+          const scoreBase =
+            urgency * 2 + priorityScore + remainingBlocks * 0.1;
+          const diversityPenalty =
+            lastTaskIdForDay && t.id === lastTaskIdForDay ? 0.5 : 1;
           return { idx, score: scoreBase * diversityPenalty };
         });
 
@@ -545,7 +657,9 @@ function generateSchedule(
           scored.length > 1 &&
           tasks[chosenIndex].id === lastTaskIdForDay
         ) {
-          const alternative = scored.find((s) => tasks[s.idx].id !== lastTaskIdForDay);
+          const alternative = scored.find(
+            (s) => tasks[s.idx].id !== lastTaskIdForDay
+          );
           if (alternative) {
             chosenIndex = alternative.idx;
           }
@@ -554,22 +668,33 @@ function generateSchedule(
         const task = tasks[chosenIndex];
         const alloc = Math.min(baseBlock, task.remainingMinutes);
         const slotStartDt = buildLocalDateTime(currentDate, cursor);
-        const slotEndDt = buildLocalDateTime(currentDate, cursor + alloc);
+        const slotEndDt = buildLocalDateTime(
+          currentDate,
+          cursor + alloc
+        );
 
-        const startStr = `${dKey}T${pad2(slotStartDt.getHours())}:${pad2(
-          slotStartDt.getMinutes()
-        )}`;
+        const startStr = `${dKey}T${pad2(
+          slotStartDt.getHours()
+        )}:${pad2(slotStartDt.getMinutes())}`;
         const endStr = `${dKey}T${pad2(slotEndDt.getHours())}:${pad2(
           slotEndDt.getMinutes()
         )}`;
 
-        const subtaskLabel = task.subtasks.length > 0 ? task.subtasks[task.nextSubIndex] : "";
+        const subtaskLabel =
+          task.subtasks.length > 0
+            ? task.subtasks[task.nextSubIndex]
+            : "";
         if (task.subtasks.length > 0) {
-          task.nextSubIndex = (task.nextSubIndex + 1) % task.subtasks.length;
+          task.nextSubIndex =
+            (task.nextSubIndex + 1) % task.subtasks.length;
         }
 
-        const titleBase = `${task.course ? task.course + " • " : ""}${task.title}`;
-        const fullTitle = subtaskLabel ? `${titleBase} – ${subtaskLabel}` : titleBase;
+        const titleBase = `${
+          task.course ? task.course + " • " : ""
+        }${task.title}`;
+        const fullTitle = subtaskLabel
+          ? `${titleBase} – ${subtaskLabel}`
+          : titleBase;
 
         const notesParts = [
           `דדליין: ${task.deadline.replace(/-/g, "/")}`,
@@ -609,7 +734,9 @@ function generateSchedule(
       remainingHours: Number((t.remainingMinutes / 60).toFixed(1)),
     }));
 
-  events.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  events.sort((a, b) =>
+    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
+  );
 
   return { events, unscheduled };
 }
@@ -646,6 +773,10 @@ const App: React.FC = () => {
     },
   ]);
 
+  const [pasteInput, setPasteInput] = useState<string>("");
+  const [pasteFeedback, setPasteFeedback] = useState<string | null>(null);
+
+
   const [weeklyObligations, setWeeklyObligations] = useState<WeeklyObligationRow[]>([
     {
       id: generateId("wo"),
@@ -676,6 +807,7 @@ const App: React.FC = () => {
 
   const [scheduleApproved, setScheduleApproved] = useState<boolean>(false);
   const [hasDownloadedOnce, setHasDownloadedOnce] = useState<boolean>(false);
+  const [showGCalGuide, setShowGCalGuide] = useState<boolean>(false);
 
   const steps = [
     { id: 1, label: "הגדרות" },
@@ -710,6 +842,101 @@ const App: React.FC = () => {
         notes: "",
       },
     ]);
+  };
+  const handlePasteAssignments = () => {
+    setPasteFeedback(null);
+    const raw = pasteInput.trim();
+    if (!raw) {
+      setPasteFeedback("לא הוזן טקסט להדבקה.");
+      return;
+    }
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    let added = 0;
+    let skippedInvalid = 0;
+    let skippedDuplicates = 0;
+
+    setAssignments((prev) => {
+      const existingKeys = new Set(
+        prev.map((a) => `${a.course}|||${a.title}|||${a.deadline}`)
+      );
+      const newRows: AssignmentRow[] = [];
+
+      for (const line of lines) {
+        // הסר מרכאות מיותרות מההתחלה ומהסוף
+        const cleanLine = line.replace(/^["']+|["']+$/g, "");
+
+        // הפרדה לפי טאב, פסיק, פסיק־ונקודה או קו־אנכי (|)
+        const cells = cleanLine
+          .split(/[\t,;|]/)
+          .map((c) => c.replace(/^["']+|["']+$/g, "").trim())
+          .filter((c) => c.length > 0);
+
+        if (cells.length < 3) {
+          skippedInvalid += 1;
+          continue;
+        }
+
+        const [courseCell, titleCell, deadlineCellRaw] = cells;
+        const deadlineCell = deadlineCellRaw.replace(/["']/g, "").trim();
+
+        if (!courseCell || !titleCell || !deadlineCell) {
+          skippedInvalid += 1;
+          continue;
+        }
+
+        // דילוג על שורת כותרת אפשרית
+        const lowerCourse = courseCell.toLowerCase();
+        const lowerTitle = titleCell.toLowerCase();
+        if (
+          lowerCourse.includes("קורס") &&
+          (lowerTitle.includes("מטלה") || lowerTitle.includes("assignment"))
+        ) {
+          continue;
+        }
+
+        const normalizedDeadline = normalizeDateString(deadlineCell);
+        if (!normalizedDeadline) {
+          skippedInvalid += 1;
+          continue;
+        }
+
+        const key = `${courseCell}|||${titleCell}|||${normalizedDeadline}`;
+        if (existingKeys.has(key)) {
+          skippedDuplicates += 1;
+          continue;
+        }
+
+        existingKeys.add(key);
+
+        newRows.push({
+          id: generateId("as"),
+          course: courseCell,
+          title: titleCell,
+          deadline: normalizedDeadline,
+          estimatedHours: 2, // ברירת מחדל, המשתמש יכול לעדכן
+          priority: 3,
+          notes: "",
+        });
+        added += 1;
+      }
+
+      return [...prev, ...newRows];
+    });
+
+    let msg = `נוספו ${added} שורות מטבלה.`;
+    if (skippedDuplicates > 0) {
+      msg += ` דילגנו על ${skippedDuplicates} כפילויות.`;
+    }
+    if (skippedInvalid > 0) {
+      msg += ` לא נוספו ${skippedInvalid} שורות בשל בעיות בפורמט.`;
+    }
+    setPasteFeedback(msg);
+    setPasteInput("");
   };
 
   const updateWeeklyObligation = (id: string, patch: Partial<WeeklyObligationRow>) => {
@@ -1090,6 +1317,51 @@ const App: React.FC = () => {
                   </button>
                 </div>
 
+                {/* פאנל הדבקת טבלה מגיליון - אופציונלי */}
+                <div className="paste-panel">
+                  <label className="small bold">
+                    ייבוא מטלות מגיליון (אופציונלי)
+                  </label>
+                  <textarea
+                    value={pasteInput}
+                    onChange={(e) => setPasteInput(e.target.value)}
+                    placeholder={
+                      "הדבק כאן טבלה מ־Sheets או Excel.\nכל שורה צריכה לכלול: קורס, מטלה, דדליין (לדוגמה 22.02.2026).\nמותר להשתמש בטאב, פסיק, נקודה־פסיק או קו אנכי (|) בין העמודות."
+                    }
+                  />
+
+                  {/* דוגמה לפורמט קלט תקין */}
+                  <div className="paste-example small muted">
+                    דוגמה לקלט תקין (שורה אחת לכל מטלה):
+                    <br />
+                    <code>
+                      סמינריון מחקר ביולוגי | כתיבת פרק ראשון |     22.02.2026
+                    </code>
+                    <br />
+                    <code>
+                      סמינריון מחקר ביולוגי | כתיבת פרק שני | 01.03.2026
+                    </code>
+                    <br />
+                    <span>
+                      אפשר גם להשתמש בטאב או בפסיקים במקום בקו אנכי. התאריכים יכולים
+                      להיות בפורמט 22.02.2026 או 2026-02-22.
+                    </span>
+                  </div>
+
+                  <div className="paste-panel-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={handlePasteAssignments}
+                    >
+                    ניתוח הטבלה והוספה למטלות
+                    </button>
+                    {pasteFeedback && (
+                      <span className="small muted">{pasteFeedback}</span>
+                    )}
+                  </div>
+                </div>
+
                 <div className="table-wrapper table-wrapper-assignments">
                   <table className="data-table data-table-assignments">
                     <thead>
@@ -1459,6 +1731,125 @@ const App: React.FC = () => {
                       {hasDownloadedOnce ? "הורדת קובץ .ics מעודכן" : "הורדת קובץ .ics"}
                     </button>
                   </div>
+                </div>
+
+                <div className="gcal-guide">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setShowGCalGuide((prev) => !prev)}
+                  >
+                    {showGCalGuide
+                      ? "הסתר מדריך הוספה ל־Google Calendar"
+                      : "מדריך: הוספת הקובץ ל־Google Calendar"}
+                  </button>
+
+                  {showGCalGuide && (
+                    <div className="gcal-guide-card">
+                      <h3 className="gcal-guide-title">
+                        יצירת לוח שנה חדש ב־Google Calendar וייבוא קובץ ה־ICS
+                      </h3>
+                      <ol className="gcal-guide-list">
+                        <li>
+                          <strong>מסך הבית של Google Calendar.</strong>
+                          <p className="small muted">
+                            היכנס/י ל־calendar.google.com בחשבון הגוגל שלך. ודא/י שאת/ה רואה
+                            את מסך לוח השנה הראשי.
+                          </p>
+                          <img
+                            src="/gcal-step-1.png"
+                            alt="מסך הבית של Google Calendar"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>פתיחת התפריט הצף ב'יומנים אחרים'.</strong>
+                          <p className="small muted">
+                            בצד שמאל, רחף/י עם העכבר מעל האזור 'יומנים אחרים' ולחץ/י על סימן
+                            הפלוס (+). בתפריט הצף, אפשרות 'יצירת לוח שנה חדש' מסומנת.
+                          </p>
+                          <img
+                            src="/gcal-step-2.png"
+                            alt="פתיחת התפריט הצף ב'יומנים אחרים' עם 'יצירת לוח שנה חדש' מסומן"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>טופס יצירת לוח שנה חדש.</strong>
+                          <p className="small muted">
+                            בחלון 'יצירת לוח שנה חדש', הקלד/י שם ברור, למשל{' '}
+                            <span className="bold">"לו״ז לימודים – סמסטר ב׳"</span>, ואז לחץ/י
+                            על כפתור 'יצירת לוח שנה'.
+                          </p>
+                          <img
+                            src="/gcal-step-3.png"
+                            alt="טופס יצירת לוח שנה חדש עם שם 'לו״ז לימודים – סמסטר ב׳' וכפתור יצירת לוח שנה מסומן"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>בחירת 'ייבוא ויצוא'.</strong>
+                            <p className="small muted">
+                              לאחר יצירת לוח השנה, בחלון ההגדרות, בחר/י בתפריט הצד 'ייבוא ויצוא'
+                              כך שהאפשרות מסומנת ומודגשת.
+                            </p>
+                            <img
+                              src="/gcal-step-4.png"
+                              alt="חלון ההגדרות עם 'ייבוא ויצוא' מסומן בתפריט הצד"
+                            />
+                        </li>
+
+                        <li>
+                          <strong>טופס ייבוא – בחירת קובץ ה־ICS.</strong>
+                          <p className="small muted">
+                            באזור 'ייבוא', לחץ/י על כפתור 'בחר קובץ' (או 'Upload') ובחר/י את
+                            קובץ ה־ICS שהורדת מהאפליקציה.
+                          </p>
+                          <img
+                            src="/gcal-step-5.png"
+                            alt="טופס ייבוא ב־Google Calendar עם כפתור בחירת הקובץ מסומן"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>טופס ייבוא – בחירת לוח השנה המתאים.</strong>
+                          <p className="small muted">
+                            בשדה 'הוסף אל לוח שנה', פתח/י את תפריט הבחירה ובחר/י את לוח השנה
+                            שיצרת קודם, למשל 'לו״ז לימודים – סמסטר ב׳'.
+                          </p>
+                          <img
+                            src="/gcal-step-6.png"
+                            alt="טופס ייבוא ב־Google Calendar עם תפריט בחירת לוח השנה מסומן"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>טופס ייבוא – לחיצה על 'ייבוא'.</strong>
+                          <p className="small muted">
+                            לאחר שבחרת קובץ ל־ICS ולוח שנה מתאים, לחץ/י על כפתור 'ייבוא' כדי
+                            להכניס את כל האירועים לקלנדר.
+                          </p>
+                          <img
+                            src="/gcal-step-7.png"
+                            alt="טופס ייבוא לאחר בחירת קובץ ולוח שנה, כפתור 'ייבוא' מסומן"
+                          />
+                        </li>
+
+                        <li>
+                          <strong>מסך הבית עם האירועים החדשים.</strong>
+                          <p className="small muted">
+                            חזור/י למסך הבית של Google Calendar, ודא/י שלוח השנה החדש מסומן
+                            בצד שמאל, ובדוק/י שהאירועים מהקובץ מופיעים בימים ובשעות שנקבעו
+                            באפליקציה.
+                          </p>
+                          <img
+                            src="/gcal-step-8.png"
+                            alt="מסך הבית של Google Calendar לאחר הייבוא, האירועים החדשים מופיעים"
+                          />
+                        </li>
+                      </ol>
+                    </div>
+                  )}
                 </div>
 
                 {error && <div className="error-box">{error}</div>}

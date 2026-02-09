@@ -518,3 +518,82 @@ button {
     margin-top: 4px;
   }
 }
+
+.paste-panel {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: rgba(15, 23, 42, 0.9);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.paste-panel textarea {
+  min-height: 64px;
+}
+
+.paste-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.paste-example {
+  margin-top: 4px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.paste-example code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  display: inline-block;
+  margin-top: 2px;
+}
+
+.gcal-guide {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gcal-guide-card {
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: rgba(15, 23, 42, 0.9);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gcal-guide-title {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+}
+
+.gcal-guide-list {
+  margin: 0;
+  padding-right: 18px; /* RTL – המספרים בצד ימין */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+.gcal-guide-list li {
+  line-height: 1.4;
+}
+
+.gcal-guide-card img {
+  margin-top: 4px;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: block;
+}
