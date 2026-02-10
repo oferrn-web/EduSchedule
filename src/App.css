@@ -43,6 +43,8 @@ body {
   flex-direction: column;
 }
 
+/* header */
+
 .app-header {
   border-bottom: 1px solid var(--border);
   padding: 12px 24px;
@@ -90,6 +92,8 @@ body {
   color: var(--muted);
 }
 
+/* main layout */
+
 .app-main {
   flex: 1;
   max-width: 1100px;
@@ -99,6 +103,8 @@ body {
   flex-direction: column;
   gap: 12px;
 }
+
+/* stepper */
 
 .stepper {
   display: flex;
@@ -135,6 +141,8 @@ body {
   justify-content: center;
   font-size: 0.7rem;
 }
+
+/* cards */
 
 .card {
   background: rgba(15, 23, 42, 0.96);
@@ -173,6 +181,39 @@ body {
   font-size: 0.75rem;
   color: var(--muted);
 }
+
+/* intro card */
+
+.intro-card {
+  background: radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), #020617 55%);
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intro-list {
+  margin: 8px 0 0;
+  padding-right: 18px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.intro-list li {
+  margin-bottom: 4px;
+}
+
+.intro-actions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+/* grid + fields */
 
 .grid-two {
   display: grid;
@@ -433,6 +474,8 @@ button {
   color: var(--muted);
 }
 
+/* summary and result actions */
+
 .summary-row {
   display: flex;
   flex-wrap: wrap;
@@ -472,7 +515,36 @@ button {
   color: var(--muted);
   text-align: center;
 }
+
+/* mobile layout for assignments table */
+
 @media (max-width: 768px) {
+  /* Header and main spacing */
+  .app-header {
+    padding: 10px 12px;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .app-main {
+    padding: 12px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .card-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .card-header-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   /* Mobile layout for the assignments table only */
   .table-wrapper-assignments {
     border-radius: 0;
@@ -519,6 +591,8 @@ button {
   }
 }
 
+/* paste panel */
+
 .paste-panel {
   margin-top: 8px;
   padding: 8px 10px;
@@ -555,11 +629,19 @@ button {
   margin-top: 2px;
 }
 
+/* Google Calendar guide */
+
 .gcal-guide {
   margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Make the guide toggle button visually a bit stronger without changing App.tsx */
+.gcal-guide > .secondary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .gcal-guide-card {
@@ -579,7 +661,7 @@ button {
 
 .gcal-guide-list {
   margin: 0;
-  padding-right: 18px; /* RTL – המספרים בצד ימין */
+  padding-right: 18px; /* RTL: המספרים בצד ימין */
   display: flex;
   flex-direction: column;
   gap: 8px;

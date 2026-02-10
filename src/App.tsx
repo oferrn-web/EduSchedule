@@ -1,5 +1,12 @@
 import React, { useState } from "react";
-import { CalendarCheck2, Clock3, Download, Plus, Trash2, Settings2 } from "lucide-react";
+import {
+  CalendarCheck2,
+  Clock3,
+  Download,
+  Plus,
+  Trash2,
+  Settings2,
+} from "lucide-react";
 import "./App.css";
 
 type LoadMode = "relaxed" | "medium" | "marathon";
@@ -68,11 +75,16 @@ type ScheduleResult = {
   unscheduled: { title: string; remainingHours: number }[];
 };
 
+type SubtaskPhase = {
+  label: string;
+  plannedMinutes: number;
+  remainingMinutes: number;
+};
+
 type InternalTask = AssignmentRow & {
   deadlineDate: Date;
   remainingMinutes: number;
-  subtasks: string[];
-  nextSubIndex: number;
+  subtasks: SubtaskPhase[];
 };
 
 const weekdayLabels: { value: number; label: string }[] = [
@@ -107,7 +119,7 @@ function normalizeDateString(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // yyyy-mm-dd (already in HTML date format)
+  // yyyy-mm-dd
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     return trimmed;
   }
@@ -130,7 +142,6 @@ function normalizeDateString(input: string): string | null {
     return `${y}-${mo}-${d}`;
   }
 
-  // Unknown format
   return null;
 }
 
@@ -247,7 +258,7 @@ function buildIcs(events: ScheduledEvent[], timezone: string): string {
   return lines.join("\r\n") + "\r\n";
 }
 
-// ---- AI-style helpers ----
+// ---- helpers ----
 
 function generateId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
@@ -265,7 +276,7 @@ function getLoadRatio(mode: LoadMode): number {
   }
 }
 
-// exam-aware default subtasks
+// heuristics for default subtasks (when user does not specify)
 function proposeSubtasks(estimatedHours: number, title: string): string[] {
   const h = estimatedHours || 0;
   const lowerTitle = title.toLowerCase();
@@ -293,22 +304,144 @@ function proposeSubtasks(estimatedHours: number, title: string): string[] {
   return ["תכנון וחלוקת חלקים", "עבודה ראשונית", "העמקה ושיפור", "עריכה והגשה"];
 }
 
-function parseSubtaskLabels(notes: string, estimatedHours: number, title: string): string[] {
-  if (!notes.trim()) {
-    return proposeSubtasks(estimatedHours, title);
-  }
+/**
+ * Parse notes into ordered subtask phases.
+ * Supports lines like:
+ *   "סקירת ספרות | 3"   (3 hours)
+ *   "כתיבת שלד, 2"      (2 hours)
+ * If no hours are given, total estimated time is split evenly.
+ */
+function parseSubtaskPhases(
+  notes: string,
+  estimatedHours: number,
+  title: string
+): SubtaskPhase[] {
+  const totalFromEstimateMinutes = Math.max(0, Math.round(estimatedHours * 60));
+
   const rawLines = notes
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
-  const cleaned = rawLines
-    .map((l) => l.replace(/^[-*•]\s*/, "").trim())
-    .filter((l) => l.length > 0);
 
-  if (cleaned.length >= 2) {
-    return cleaned;
+  let labels: string[] = [];
+  const hoursHints: Array<number | null> = [];
+
+  if (rawLines.length === 0) {
+    const defaults = proposeSubtasks(estimatedHours, title);
+    labels = defaults;
+    for (let i = 0; i < defaults.length; i += 1) {
+      hoursHints.push(null);
+    }
+  } else {
+    const cleaned = rawLines
+      .map((l) => l.replace(/^[-*•]\s*/, "").trim())
+      .filter((l) => l.length > 0);
+
+    cleaned.forEach((line) => {
+      const m = line.match(/^(.*?)[|,]\s*(\d+(?:\.\d+)?)\s*$/);
+      if (m) {
+        const label = m[1].trim();
+        const hoursNum = Number(m[2]);
+        if (label) {
+          labels.push(label);
+          hoursHints.push(Number.isFinite(hoursNum) && hoursNum > 0 ? hoursNum : null);
+        }
+      } else {
+        labels.push(line);
+        hoursHints.push(null);
+      }
+    });
   }
-  return proposeSubtasks(estimatedHours, title);
+
+  if (!labels.length) {
+    return [];
+  }
+
+  const explicitMinutes = hoursHints.map((h) =>
+    h && h > 0 ? Math.round(h * 60) : 0
+  );
+  const totalExplicitMinutes = explicitMinutes.reduce((sum, v) => sum + v, 0);
+
+  let totalMinutes = totalFromEstimateMinutes > 0 ? totalFromEstimateMinutes : totalExplicitMinutes;
+  if (totalMinutes === 0) {
+    totalMinutes = labels.length * 60;
+  }
+  if (totalExplicitMinutes > totalMinutes) {
+    totalMinutes = totalExplicitMinutes;
+  }
+
+  const implicitCount = hoursHints.filter((h) => !h || h <= 0).length;
+  const remainingForImplicit = Math.max(0, totalMinutes - totalExplicitMinutes);
+  const baseImplicitShare = implicitCount > 0 ? Math.floor(remainingForImplicit / implicitCount) : 0;
+  let implicitRemainder = remainingForImplicit - baseImplicitShare * implicitCount;
+
+  const phases: SubtaskPhase[] = [];
+
+  for (let i = 0; i < labels.length; i += 1) {
+    const label = labels[i];
+    const hintHours = hoursHints[i];
+    let plannedMinutes: number;
+
+    if (hintHours && hintHours > 0) {
+      plannedMinutes = Math.round(hintHours * 60);
+    } else {
+      plannedMinutes = baseImplicitShare;
+      if (implicitRemainder > 0) {
+        plannedMinutes += 1;
+        implicitRemainder -= 1;
+      }
+    }
+
+    if (plannedMinutes <= 0) {
+      plannedMinutes = 30;
+    }
+
+    phases.push({
+      label,
+      plannedMinutes,
+      remainingMinutes: plannedMinutes,
+    });
+  }
+
+  return phases;
+}
+
+function getCurrentSubtaskRemaining(t: InternalTask): number {
+  if (!t.subtasks.length) return t.remainingMinutes;
+  const current = t.subtasks.find((s) => s.remainingMinutes > 0);
+  return current ? current.remainingMinutes : 0;
+}
+
+function getCurrentSubtaskLabelAndIndex(
+  t: InternalTask
+): { label: string; index: number } | null {
+  if (!t.subtasks.length) return null;
+  for (let i = 0; i < t.subtasks.length; i += 1) {
+    if (t.subtasks[i].remainingMinutes > 0) {
+      return { label: t.subtasks[i].label, index: i };
+    }
+  }
+  return null;
+}
+
+function getEventDurationMinutes(ev: ScheduledEvent): number {
+  try {
+    const [d1, t1] = ev.start.split("T");
+    const [y1, m1, day1] = d1.split("-").map(Number);
+    const [h1, min1] = t1.split(":").map(Number);
+
+    const [d2, t2] = ev.end.split("T");
+    const [y2, m2, day2] = d2.split("-").map(Number);
+    const [h2, min2] = t2.split(":").map(Number);
+
+    const start = new Date(y1, (m1 || 1) - 1, day1 || 1, h1 || 0, min1 || 0, 0, 0);
+    const end = new Date(y2, (m2 || 1) - 1, day2 || 1, h2 || 0, min2 || 0, 0, 0);
+    const diffMs = end.getTime() - start.getTime();
+    const minutes = Math.round(diffMs / (1000 * 60));
+    return minutes > 0 ? minutes : 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ---- Scheduler ----
@@ -324,20 +457,23 @@ function generateSchedule(
     .filter((a) => a.title.trim() && a.estimatedHours > 0 && a.deadline)
     .map((a) => {
       const deadlineDate = new Date(a.deadline + "T23:59:00");
-      const remainingMinutes = Math.round(a.estimatedHours * 60);
-      const subtasks = parseSubtaskLabels(a.notes, a.estimatedHours, a.title);
+      const subtasks = parseSubtaskPhases(a.notes, a.estimatedHours, a.title);
+      const totalMinutesFromSubtasks = subtasks.reduce(
+        (sum, s) => sum + s.plannedMinutes,
+        0
+      );
+      const fallbackMinutes =
+        totalMinutesFromSubtasks > 0
+          ? totalMinutesFromSubtasks
+          : Math.round(a.estimatedHours * 60);
       return {
         ...a,
         deadlineDate,
-        remainingMinutes,
+        remainingMinutes: fallbackMinutes,
         subtasks,
-        nextSubIndex: 0,
       };
     })
-    .filter(
-      (a) =>
-        !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0
-    );
+    .filter((a) => !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0);
 
   if (!tasks.length) {
     return { events: [], unscheduled: [] };
@@ -355,9 +491,7 @@ function generateSchedule(
   });
 
   const startDateObj = cloneDateOnly(
-    settings.startDate
-      ? new Date(settings.startDate + "T00:00:00")
-      : new Date()
+    settings.startDate ? new Date(settings.startDate + "T00:00:00") : new Date()
   );
 
   let maxDeadline = cloneDateOnly(tasks[0].deadlineDate);
@@ -368,18 +502,12 @@ function generateSchedule(
 
   const dailyMaxMinutes = Math.round(settings.dailyMaxHours * 60);
   const maxTaskMinutesPerDay = Math.round(settings.maxTaskHoursPerDay * 60);
-  const blockMinutes = Math.max(
-    15,
-    Math.min(240, Math.round(settings.blockMinutes))
-  );
+  const blockMinutes = Math.max(15, Math.min(240, Math.round(settings.blockMinutes)));
   const breakMinutes = Math.max(0, Math.min(60, Math.round(settings.breakMinutes)));
   const bufferMinutes = Math.max(0, Math.round(settings.bufferHours * 60));
 
   const ratio = getLoadRatio(settings.loadMode || "medium");
-  const effectiveDailyMinutes = Math.max(
-    30,
-    Math.round(dailyMaxMinutes * ratio)
-  );
+  const effectiveDailyMinutes = Math.max(30, Math.round(dailyMaxMinutes * ratio));
   const effectiveTaskMinutesPerDay = Math.max(
     15,
     Math.round(maxTaskMinutesPerDay * ratio)
@@ -390,11 +518,9 @@ function generateSchedule(
   const perTaskPerDayMinutes: Record<string, number> = {};
 
   function addStudyMinutes(dayKey: string, taskId: string, minutes: number) {
-    perDayStudyMinutes[dayKey] =
-      (perDayStudyMinutes[dayKey] || 0) + minutes;
+    perDayStudyMinutes[dayKey] = (perDayStudyMinutes[dayKey] || 0) + minutes;
     const key = `${taskId}__${dayKey}`;
-    perTaskPerDayMinutes[key] =
-      (perTaskPerDayMinutes[key] || 0) + minutes;
+    perTaskPerDayMinutes[key] = (perTaskPerDayMinutes[key] || 0) + minutes;
   }
 
   function getStudyMinutes(dayKey: string): number {
@@ -417,17 +543,12 @@ function generateSchedule(
     specificByDate[o.date].push(o);
   });
 
-  const workStartMinutes =
-    parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
-  const workEndMinutes =
-    parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
+  const workStartMinutes = parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
+  const workEndMinutes = parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
   const workingWeek = new Set(settings.workingWeekdays);
 
   const dayCount =
-    Math.round(
-      (maxDeadline.getTime() - startDateObj.getTime()) /
-        (24 * 60 * 60 * 1000)
-    ) + 1;
+    Math.round((maxDeadline.getTime() - startDateObj.getTime()) / (24 * 60 * 60 * 1000)) + 1;
 
   // count how many working days exist in the whole range
   let totalWorkingDays = 0;
@@ -449,7 +570,7 @@ function generateSchedule(
     const weekBlocked = weeklyByDay[weekday] || [];
     const specificBlocked = specificByDate[dKey] || [];
 
-    // add obligations to events, for visibility
+    // obligations as events
     weekBlocked.forEach((o) => {
       const sMin = parseTimeToMinutes(o.startTime);
       const eMin = parseTimeToMinutes(o.endTime);
@@ -460,12 +581,8 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ שבועי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
-            sDt.getMinutes()
-          )}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
-            eDt.getMinutes()
-          )}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
           notes: "אילוץ שבועי קבוע",
           course: undefined,
         });
@@ -482,12 +599,8 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ בתאריך",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
-            sDt.getMinutes()
-          )}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
-            eDt.getMinutes()
-          )}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
           notes: "אילוץ חד פעמי",
           course: undefined,
         });
@@ -505,12 +618,8 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ יומי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
-            sDt.getMinutes()
-          )}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
-            eDt.getMinutes()
-          )}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
           notes: "אילוץ יומי קבוע",
           course: undefined,
         });
@@ -519,18 +628,13 @@ function generateSchedule(
 
     if (!workingWeek.has(weekday)) continue;
 
-    // dynamic daily budget based on remaining work and remaining working days
-    const remainingMinutesAll = tasks.reduce(
-      (sum, t) => sum + t.remainingMinutes,
-      0
-    );
+    const remainingMinutesAll = tasks.reduce((sum, t) => sum + t.remainingMinutes, 0);
     if (remainingMinutesAll <= 0) break;
 
     const remainingWorkingDays = totalWorkingDays - workingDayIndex;
     if (remainingWorkingDays <= 0) break;
 
     const idealPerDay = remainingMinutesAll / remainingWorkingDays;
-
     const mode = settings.loadMode || "medium";
     const spreadMultiplier =
       mode === "relaxed" ? 0.8 : mode === "marathon" ? 1.3 : 1.0;
@@ -604,15 +708,18 @@ function generateSchedule(
           const taskDayStudied = getTaskDayMinutes(t.id, dKey);
           if (taskDayStudied >= effectiveTaskMinutesPerDay) continue;
 
-          const allocCandidate = Math.min(baseBlock, t.remainingMinutes);
+          const subRemaining = getCurrentSubtaskRemaining(t);
+          if (subRemaining <= 0 && t.subtasks.length > 0) continue;
+
+          const allocCandidate = Math.min(
+            baseBlock,
+            t.remainingMinutes,
+            subRemaining > 0 ? subRemaining : baseBlock
+          );
           if (allocCandidate < 10) continue;
 
           if (dayStudied + allocCandidate > dailyBudgetMinutes) continue;
-          if (
-            taskDayStudied + allocCandidate >
-            effectiveTaskMinutesPerDay
-          )
-            continue;
+          if (taskDayStudied + allocCandidate > effectiveTaskMinutesPerDay) continue;
 
           const slotEndDtCandidate = buildLocalDateTime(
             currentDate,
@@ -621,29 +728,21 @@ function generateSchedule(
           const deadlineWithBuffer = new Date(
             t.deadlineDate.getTime() - bufferMinutes * 60 * 1000
           );
-          if (
-            slotEndDtCandidate.getTime() >
-            deadlineWithBuffer.getTime()
-          )
-            continue;
+          if (slotEndDtCandidate.getTime() > deadlineWithBuffer.getTime()) continue;
 
           candidateIndices.push(i);
         }
 
         if (!candidateIndices.length) break;
 
-        // urgency + priority + remaining work + diversity
         const scored = candidateIndices.map((idx) => {
           const t = tasks[idx];
-          const msDiff =
-            t.deadlineDate.getTime() - currentDate.getTime();
+          const msDiff = t.deadlineDate.getTime() - currentDate.getTime();
           const daysDiff = msDiff / (1000 * 60 * 60 * 24);
-          const urgency =
-            daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
+          const urgency = daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
           const priorityScore = t.priority;
           const remainingBlocks = t.remainingMinutes / blockMinutes;
-          const scoreBase =
-            urgency * 2 + priorityScore + remainingBlocks * 0.1;
+          const scoreBase = urgency * 2 + priorityScore + remainingBlocks * 0.1;
           const diversityPenalty =
             lastTaskIdForDay && t.id === lastTaskIdForDay ? 0.5 : 1;
           return { idx, score: scoreBase * diversityPenalty };
@@ -657,44 +756,39 @@ function generateSchedule(
           scored.length > 1 &&
           tasks[chosenIndex].id === lastTaskIdForDay
         ) {
-          const alternative = scored.find(
-            (s) => tasks[s.idx].id !== lastTaskIdForDay
-          );
+          const alternative = scored.find((s) => tasks[s.idx].id !== lastTaskIdForDay);
           if (alternative) {
             chosenIndex = alternative.idx;
           }
         }
 
         const task = tasks[chosenIndex];
-        const alloc = Math.min(baseBlock, task.remainingMinutes);
-        const slotStartDt = buildLocalDateTime(currentDate, cursor);
-        const slotEndDt = buildLocalDateTime(
-          currentDate,
-          cursor + alloc
+
+        const currentPhase = getCurrentSubtaskLabelAndIndex(task);
+        const subRemaining =
+          currentPhase && task.subtasks[currentPhase.index]
+            ? task.subtasks[currentPhase.index].remainingMinutes
+            : 0;
+
+        const alloc = Math.min(
+          baseBlock,
+          task.remainingMinutes,
+          subRemaining > 0 ? subRemaining : baseBlock
         );
 
-        const startStr = `${dKey}T${pad2(
-          slotStartDt.getHours()
-        )}:${pad2(slotStartDt.getMinutes())}`;
+        const slotStartDt = buildLocalDateTime(currentDate, cursor);
+        const slotEndDt = buildLocalDateTime(currentDate, cursor + alloc);
+
+        const startStr = `${dKey}T${pad2(slotStartDt.getHours())}:${pad2(
+          slotStartDt.getMinutes()
+        )}`;
         const endStr = `${dKey}T${pad2(slotEndDt.getHours())}:${pad2(
           slotEndDt.getMinutes()
         )}`;
 
-        const subtaskLabel =
-          task.subtasks.length > 0
-            ? task.subtasks[task.nextSubIndex]
-            : "";
-        if (task.subtasks.length > 0) {
-          task.nextSubIndex =
-            (task.nextSubIndex + 1) % task.subtasks.length;
-        }
-
-        const titleBase = `${
-          task.course ? task.course + " • " : ""
-        }${task.title}`;
-        const fullTitle = subtaskLabel
-          ? `${titleBase} – ${subtaskLabel}`
-          : titleBase;
+        const subtaskLabel = currentPhase ? currentPhase.label : "";
+        const titleBase = `${task.course ? task.course + " • " : ""}${task.title}`;
+        const fullTitle = subtaskLabel ? `${titleBase} – ${subtaskLabel}` : titleBase;
 
         const notesParts = [
           `דדליין: ${task.deadline.replace(/-/g, "/")}`,
@@ -720,6 +814,10 @@ function generateSchedule(
         });
 
         task.remainingMinutes -= alloc;
+        if (currentPhase) {
+          const phase = task.subtasks[currentPhase.index];
+          phase.remainingMinutes = Math.max(0, phase.remainingMinutes - alloc);
+        }
         addStudyMinutes(dKey, task.id, alloc);
         lastTaskIdForDay = task.id;
         cursor += alloc + breakMinutes;
@@ -734,9 +832,7 @@ function generateSchedule(
       remainingHours: Number((t.remainingMinutes / 60).toFixed(1)),
     }));
 
-  events.sort((a, b) =>
-    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
-  );
+  events.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 
   return { events, unscheduled };
 }
@@ -769,13 +865,12 @@ const App: React.FC = () => {
       deadline: todayStr,
       estimatedHours: 6,
       priority: 4,
-      notes: "מבנה העבודה:\n- מבוא\n- גוף\n- סיכום",
+      notes: "סקירת ספרות | 3\nכתיבת שלד | 2\nעריכה והגשה | 1",
     },
   ]);
 
   const [pasteInput, setPasteInput] = useState<string>("");
   const [pasteFeedback, setPasteFeedback] = useState<string | null>(null);
-
 
   const [weeklyObligations, setWeeklyObligations] = useState<WeeklyObligationRow[]>([
     {
@@ -787,7 +882,9 @@ const App: React.FC = () => {
     },
   ]);
 
-  const [specificObligations, setSpecificObligations] = useState<SpecificObligationRow[]>([]);
+  const [specificObligations, setSpecificObligations] = useState<SpecificObligationRow[]>(
+    []
+  );
 
   const [dailyObligations, setDailyObligations] = useState<DailyObligationRow[]>([
     {
@@ -800,6 +897,7 @@ const App: React.FC = () => {
 
   const [activeStep, setActiveStep] = useState<number>(1);
   const [showIntro, setShowIntro] = useState<boolean>(true);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
 
   const [result, setResult] = useState<ScheduleResult | null>(null);
   const [icsContent, setIcsContent] = useState<string | null>(null);
@@ -843,6 +941,7 @@ const App: React.FC = () => {
       },
     ]);
   };
+
   const handlePasteAssignments = () => {
     setPasteFeedback(null);
     const raw = pasteInput.trim();
@@ -867,10 +966,8 @@ const App: React.FC = () => {
       const newRows: AssignmentRow[] = [];
 
       for (const line of lines) {
-        // הסר מרכאות מיותרות מההתחלה ומהסוף
         const cleanLine = line.replace(/^["']+|["']+$/g, "");
 
-        // הפרדה לפי טאב, פסיק, פסיק־ונקודה או קו־אנכי (|)
         const cells = cleanLine
           .split(/[\t,;|]/)
           .map((c) => c.replace(/^["']+|["']+$/g, "").trim())
@@ -889,7 +986,6 @@ const App: React.FC = () => {
           continue;
         }
 
-        // דילוג על שורת כותרת אפשרית
         const lowerCourse = courseCell.toLowerCase();
         const lowerTitle = titleCell.toLowerCase();
         if (
@@ -918,7 +1014,7 @@ const App: React.FC = () => {
           course: courseCell,
           title: titleCell,
           deadline: normalizedDeadline,
-          estimatedHours: 2, // ברירת מחדל, המשתמש יכול לעדכן
+          estimatedHours: 2,
           priority: 3,
           notes: "",
         });
@@ -1052,6 +1148,39 @@ const App: React.FC = () => {
     setActiveStep(1);
   };
 
+  // derived course summary for Step 4
+  const courseSummary =
+    result && result.events.length > 0
+      ? (() => {
+          const map: Record<
+            string,
+            { totalMinutes: number; days: Set<string>; taskEvents: number }
+          > = {};
+          result.events.forEach((ev) => {
+            if (ev.kind !== "task") return;
+            const courseName = ev.course && ev.course.trim().length > 0 ? ev.course : "ללא קורס";
+            if (!map[courseName]) {
+              map[courseName] = {
+                totalMinutes: 0,
+                days: new Set<string>(),
+                taskEvents: 0,
+              };
+            }
+            const minutes = getEventDurationMinutes(ev);
+            map[courseName].totalMinutes += minutes;
+            const [dPart] = ev.start.split("T");
+            map[courseName].days.add(dPart);
+            map[courseName].taskEvents += 1;
+          });
+          return Object.entries(map).map(([course, data]) => ({
+            course,
+            totalMinutes: data.totalMinutes,
+            distinctDays: data.days.size,
+            taskEvents: data.taskEvents,
+          }));
+        })()
+      : [];
+
   return (
     <div className="app-root" dir="rtl">
       <header className="app-header">
@@ -1083,7 +1212,7 @@ const App: React.FC = () => {
             <ul className="intro-list">
               <li>הזנת קורסים ומטלות עם דדליינים והערכה לשעות עבודה.</li>
               <li>קביעת אילוצים שבועיים, יומיים ותאריכים מיוחדים כמו מבחנים.</li>
-              <li>אלגוריתם חלוקה דינמי לפי מצב עומס, דדליין ותתי משימות.</li>
+              <li>חלוקה לתתי משימות לפי סדר הגיוני בתוך כל מטלה.</li>
               <li>ייצוא ללו״ז ב־Google Calendar בקובץ .ics.</li>
             </ul>
             <div className="intro-actions">
@@ -1115,7 +1244,8 @@ const App: React.FC = () => {
               <section className="card">
                 <h2 className="card-title">הגדרות בסיס</h2>
                 <p className="card-desc">
-                  בחר/י אזור זמן, תאריך התחלה, חלון עבודה יומי, מצב עומס והגבלות עומס.
+                  בחר/י אזור זמן, תאריך התחלה, חלון עבודה יומי ומצב עומס. אפשר לפתוח גם הגדרות
+                  מתקדמות למי שמעדיפ/ה שליטה מלאה.
                 </p>
                 <div className="grid-two">
                   <div className="field-group">
@@ -1181,74 +1311,6 @@ const App: React.FC = () => {
                     />
                   </div>
                   <div className="field-group">
-                    <label>מקסימום שעות לאותה מטלה ביום</label>
-                    <input
-                      type="number"
-                      style={largeInputStyle}
-                      min={1}
-                      max={8}
-                      step={0.5}
-                      value={settings.maxTaskHoursPerDay}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          maxTaskHoursPerDay: Number(e.target.value) || 0,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label>אורך בלוק עבודה (דקות)</label>
-                    <input
-                      type="number"
-                      style={largeInputStyle}
-                      min={15}
-                      max={240}
-                      step={15}
-                      value={settings.blockMinutes}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          blockMinutes: Number(e.target.value) || 0,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label>הפסקה בין בלוקים (דקות)</label>
-                    <input
-                      type="number"
-                      style={largeInputStyle}
-                      min={0}
-                      max={60}
-                      step={5}
-                      value={settings.breakMinutes}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          breakMinutes: Number(e.target.value) || 0,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="field-group">
-                    <label>מרווח ביטחון לפני דדליין (שעות)</label>
-                    <input
-                      type="number"
-                      style={largeInputStyle}
-                      min={0}
-                      max={96}
-                      step={12}
-                      value={settings.bufferHours}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          bufferHours: Number(e.target.value) || 0,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="field-group">
                     <label>מצב עומס מועדף</label>
                     <select
                       style={largeInputStyle}
@@ -1265,9 +1327,17 @@ const App: React.FC = () => {
                       <option value="marathon">מצב מרתון</option>
                     </select>
                     <small>
-                      מצב רגוע מפזר עבודה על פחות בלוקים ביום, מצב מרתון מנצל את המקסימום
-                      שהגדרת.
+                      מצב רגוע מפזר עבודה במתינות לאורך הימים. מצב בינוני מאזן בין ניצול הזמן
+                      להפחתת עומס. מצב מרתון מנצל את המקסימום שהגדרת, כדי לסיים מוקדם יותר.
                     </small>
+                    <div className="workload-info small">
+                      <div className="bold">איך מצב העומס משפיע בפועל?</div>
+                      <p>
+                        האלגוריתם מחשב כמות עבודה יומית אידיאלית לפי כמות הזמן שנותרה עד
+                        הדדליינים ומפחית או מגביר אותה לפי מצב העומס. כך הלו״ז מרגיש מותאם
+                        אישית לקצב הלמידה שלך.
+                      </p>
+                    </div>
                   </div>
                   <div className="field-group full-width">
                     <label>ימים שבהם מותר לשבץ מטלות</label>
@@ -1291,6 +1361,96 @@ const App: React.FC = () => {
                   </div>
                 </div>
 
+                <div className="advanced-toggle-row">
+                  <button
+                    type="button"
+                    className="secondary advanced-toggle"
+                    onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                  >
+                    <Settings2 size={14} />
+                    {showAdvancedSettings
+                      ? "הסתר הגדרות מתקדמות"
+                      : "הצג הגדרות מתקדמות (בלוקים, מרווח ביטחון ועוד)"}
+                  </button>
+                </div>
+
+                {showAdvancedSettings && (
+                  <div className="grid-two advanced-panel">
+                    <div className="field-group">
+                      <label>מקסימום שעות לאותה מטלה ביום</label>
+                      <input
+                        type="number"
+                        style={largeInputStyle}
+                        min={1}
+                        max={8}
+                        step={0.5}
+                        value={settings.maxTaskHoursPerDay}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            maxTaskHoursPerDay: Number(e.target.value) || 0,
+                          }))
+                        }
+                      />
+                      <small>מגביל כמה זמן רצוף תהיה עם אותה מטלה באותו יום.</small>
+                    </div>
+                    <div className="field-group">
+                      <label>אורך בלוק עבודה (דקות)</label>
+                      <input
+                        type="number"
+                        style={largeInputStyle}
+                        min={15}
+                        max={240}
+                        step={15}
+                        value={settings.blockMinutes}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            blockMinutes: Number(e.target.value) || 0,
+                          }))
+                        }
+                      />
+                      <small>לדוגמה 60 או 90 דקות לבלוק לימוד אחד.</small>
+                    </div>
+                    <div className="field-group">
+                      <label>הפסקה בין בלוקים (דקות)</label>
+                      <input
+                        type="number"
+                        style={largeInputStyle}
+                        min={0}
+                        max={60}
+                        step={5}
+                        value={settings.breakMinutes}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            breakMinutes: Number(e.target.value) || 0,
+                          }))
+                        }
+                      />
+                      <small>הפסקה קבועה אחרי כל בלוק עבודה שהלו״ז ייצור.</small>
+                    </div>
+                    <div className="field-group">
+                      <label>מרווח ביטחון לפני דדליין (שעות)</label>
+                      <input
+                        type="number"
+                        style={largeInputStyle}
+                        min={0}
+                        max={96}
+                        step={12}
+                        value={settings.bufferHours}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            bufferHours: Number(e.target.value) || 0,
+                          }))
+                        }
+                      />
+                      <small>מונע קביעת בלוקים בדקות האחרונות לפני הדדליין.</small>
+                    </div>
+                  </div>
+                )}
+
                 <div className="card-footer">
                   <span className="muted">שלב 1 מתוך 4</span>
                   <button type="button" className="primary" onClick={() => setActiveStep(2)}>
@@ -1307,8 +1467,9 @@ const App: React.FC = () => {
                   <div>
                     <h2 className="card-title">קורסים ומטלות</h2>
                     <p className="card-desc">
-                      כל שורה מייצגת מטלה גדולה. אפשר לפרט תתי משימות בשדה ההערות, שיכנסו
-                      ללו״ז.
+                      כל שורה מייצגת מטלה גדולה. אפשר לפרט תתי משימות בשדה ההערות, כולל הערכת
+                      זמן לכל תת משימה. האלגוריתם יסיים שלב אחד לפני שיעבור לשלב הבא באותה
+                      מטלה.
                     </p>
                   </div>
                   <button type="button" className="secondary" onClick={addAssignment}>
@@ -1319,9 +1480,7 @@ const App: React.FC = () => {
 
                 {/* פאנל הדבקת טבלה מגיליון - אופציונלי */}
                 <div className="paste-panel">
-                  <label className="small bold">
-                    ייבוא מטלות מגיליון (אופציונלי)
-                  </label>
+                  <label className="small bold">ייבוא מטלות מגיליון (אופציונלי)</label>
                   <textarea
                     value={pasteInput}
                     onChange={(e) => setPasteInput(e.target.value)}
@@ -1330,12 +1489,11 @@ const App: React.FC = () => {
                     }
                   />
 
-                  {/* דוגמה לפורמט קלט תקין */}
                   <div className="paste-example small muted">
                     דוגמה לקלט תקין (שורה אחת לכל מטלה):
                     <br />
                     <code>
-                      סמינריון מחקר ביולוגי | כתיבת פרק ראשון |     22.02.2026
+                      סמינריון מחקר ביולוגי | כתיבת פרק ראשון | 22.02.2026
                     </code>
                     <br />
                     <code>
@@ -1343,8 +1501,8 @@ const App: React.FC = () => {
                     </code>
                     <br />
                     <span>
-                      אפשר גם להשתמש בטאב או בפסיקים במקום בקו אנכי. התאריכים יכולים
-                      להיות בפורמט 22.02.2026 או 2026-02-22.
+                      אפשר גם להשתמש בטאב או בפסיקים במקום בקו אנכי. התאריכים יכולים להיות
+                      בפורמט 22.02.2026 או 2026-02-22.
                     </span>
                   </div>
 
@@ -1354,11 +1512,9 @@ const App: React.FC = () => {
                       className="secondary"
                       onClick={handlePasteAssignments}
                     >
-                    ניתוח הטבלה והוספה למטלות
+                      ניתוח הטבלה והוספה למטלות
                     </button>
-                    {pasteFeedback && (
-                      <span className="small muted">{pasteFeedback}</span>
-                    )}
+                    {pasteFeedback && <span className="small muted">{pasteFeedback}</span>}
                   </div>
                 </div>
 
@@ -1439,7 +1595,7 @@ const App: React.FC = () => {
                                 updateAssignment(row.id, { notes: e.target.value })
                               }
                               placeholder={
-                                "אפשר לכתוב תתי משימות, כל שורה או תבליט כשלב נפרד.\nלדוגמה:\n- קריאת מאמרים\n- כתיבת שלד\n- ניסוח סופי"
+                                "אפשר לכתוב תתי משימות לפי סדר העבודה, כל שורה כשלב נפרד.\nכדי להעריך זמן לתת משימה, השתמש/י בפורמט:\nסקירת ספרות | 3   (שלוש שעות)\nכתיבת שלד | 2\nעריכה והגשה | 1"
                               }
                             />
                           </td>
@@ -1694,8 +1850,9 @@ const App: React.FC = () => {
                   <div>
                     <h2 className="card-title">לו״ז וייצוא</h2>
                     <p className="card-desc">
-                      הלו״ז מחלק את הזמן לפי מצב העומס, הדדליינים ותתי המשימות. כל בלוק מסומן
-                      לפי תת משימה. אפשר לאשר ואחר כך להוריד קובץ ICS.
+                      הלו״ז מחלק את הזמן לפי מצב העומס, הדדליינים ותתי המשימות. בתוך כל מטלה
+                      תת משימה אחת מסתיימת לפני שהבאה אחריה מתחילה. אפשר לאשר ואחר כך להוריד
+                      קובץ ICS.
                     </p>
                   </div>
                   <div className="result-actions">
@@ -1736,12 +1893,12 @@ const App: React.FC = () => {
                 <div className="gcal-guide">
                   <button
                     type="button"
-                    className="secondary"
+                    className="secondary guide-button"
                     onClick={() => setShowGCalGuide((prev) => !prev)}
                   >
                     {showGCalGuide
                       ? "הסתר מדריך הוספה ל־Google Calendar"
-                      : "מדריך: הוספת הקובץ ל־Google Calendar"}
+                      : "מדריך מצולם: הוספת הקובץ ל־Google Calendar"}
                   </button>
 
                   {showGCalGuide && (
@@ -1753,57 +1910,55 @@ const App: React.FC = () => {
                         <li>
                           <strong>מסך הבית של Google Calendar.</strong>
                           <p className="small muted">
-                            היכנס/י ל־calendar.google.com בחשבון הגוגל שלך. ודא/י שאת/ה רואה
-                            את מסך לוח השנה הראשי.
+                            היכנס/י ל־calendar.google.com בחשבון הגוגל שלך. ודא/י שאת/ה רואה את
+                            מסך לוח השנה הראשי.
                           </p>
-                          <img
-                            src="/gcal-step-1.png"
-                            alt="מסך הבית של Google Calendar"
-                          />
+                          <img src="/gcal-step-1.png" alt="מסך הבית של Google Calendar" />
                         </li>
 
                         <li>
-                          <strong>פתיחת התפריט הצף ב'יומנים אחרים'.</strong>
+                          <strong>פתיחת התפריט הצף ב&quot;יומנים אחרים&quot;.</strong>
                           <p className="small muted">
-                            בצד שמאל, רחף/י עם העכבר מעל האזור 'יומנים אחרים' ולחץ/י על סימן
-                            הפלוס (+). בתפריט הצף, אפשרות 'יצירת לוח שנה חדש' מסומנת.
+                            בצד שמאל, רחף/י עם העכבר מעל האזור &quot;יומנים אחרים&quot; ולחץ/י
+                            על סימן הפלוס (+). בתפריט הצף, אפשרות &quot;יצירת לוח שנה
+                            חדש&quot; מסומנת.
                           </p>
                           <img
                             src="/gcal-step-2.png"
-                            alt="פתיחת התפריט הצף ב'יומנים אחרים' עם 'יצירת לוח שנה חדש' מסומן"
+                            alt='פתיחת התפריט הצף ב"יומנים אחרים" עם "יצירת לוח שנה חדש" מסומן'
                           />
                         </li>
 
                         <li>
                           <strong>טופס יצירת לוח שנה חדש.</strong>
                           <p className="small muted">
-                            בחלון 'יצירת לוח שנה חדש', הקלד/י שם ברור, למשל{' '}
-                            <span className="bold">"לו״ז לימודים – סמסטר ב׳"</span>, ואז לחץ/י
-                            על כפתור 'יצירת לוח שנה'.
+                            בחלון &quot;יצירת לוח שנה חדש&quot;, הקלד/י שם ברור, למשל{" "}
+                            <span className="bold">"לו״ז לימודים – סמסטר ב״"</span>, ואז לחץ/י
+                            על כפתור &quot;יצירת לוח שנה&quot;.
                           </p>
                           <img
                             src="/gcal-step-3.png"
-                            alt="טופס יצירת לוח שנה חדש עם שם 'לו״ז לימודים – סמסטר ב׳' וכפתור יצירת לוח שנה מסומן"
+                            alt='טופס יצירת לוח שנה חדש עם שם "לו״ז לימודים – סמסטר ב״" וכפתור יצירת לוח שנה מסומן'
                           />
                         </li>
 
                         <li>
-                          <strong>בחירת 'ייבוא ויצוא'.</strong>
-                            <p className="small muted">
-                              לאחר יצירת לוח השנה, בחלון ההגדרות, בחר/י בתפריט הצד 'ייבוא ויצוא'
-                              כך שהאפשרות מסומנת ומודגשת.
-                            </p>
-                            <img
-                              src="/gcal-step-4.png"
-                              alt="חלון ההגדרות עם 'ייבוא ויצוא' מסומן בתפריט הצד"
-                            />
+                          <strong>בחירת &quot;ייבוא ויצוא&quot;.</strong>
+                          <p className="small muted">
+                            לאחר יצירת לוח השנה, בחלון ההגדרות, בחר/י בתפריט הצד &quot;ייבוא
+                            ויצוא&quot; כך שהאפשרות מסומנת ומודגשת.
+                          </p>
+                          <img
+                            src="/gcal-step-4.png"
+                            alt='חלון ההגדרות עם "ייבוא ויצוא" מסומן בתפריט הצד'
+                          />
                         </li>
 
                         <li>
                           <strong>טופס ייבוא – בחירת קובץ ה־ICS.</strong>
                           <p className="small muted">
-                            באזור 'ייבוא', לחץ/י על כפתור 'בחר קובץ' (או 'Upload') ובחר/י את
-                            קובץ ה־ICS שהורדת מהאפליקציה.
+                            באזור &quot;ייבוא&quot;, לחץ/י על כפתור &quot;בחר קובץ&quot; (או
+                            &quot;Upload&quot;) ובחר/י את קובץ ה־ICS שהורדת מהאפליקציה.
                           </p>
                           <img
                             src="/gcal-step-5.png"
@@ -1814,8 +1969,8 @@ const App: React.FC = () => {
                         <li>
                           <strong>טופס ייבוא – בחירת לוח השנה המתאים.</strong>
                           <p className="small muted">
-                            בשדה 'הוסף אל לוח שנה', פתח/י את תפריט הבחירה ובחר/י את לוח השנה
-                            שיצרת קודם, למשל 'לו״ז לימודים – סמסטר ב׳'.
+                            בשדה &quot;הוסף אל לוח שנה&quot;, פתח/י את תפריט הבחירה ובחר/י את
+                            לוח השנה שיצרת קודם, למשל &quot;לו״ז לימודים – סמסטר ב״&quot;.
                           </p>
                           <img
                             src="/gcal-step-6.png"
@@ -1824,22 +1979,22 @@ const App: React.FC = () => {
                         </li>
 
                         <li>
-                          <strong>טופס ייבוא – לחיצה על 'ייבוא'.</strong>
+                          <strong>טופס ייבוא – לחיצה על &quot;ייבוא&quot;.</strong>
                           <p className="small muted">
-                            לאחר שבחרת קובץ ל־ICS ולוח שנה מתאים, לחץ/י על כפתור 'ייבוא' כדי
-                            להכניס את כל האירועים לקלנדר.
+                            לאחר שבחרת קובץ ל־ICS ולוח שנה מתאים, לחץ/י על כפתור &quot;ייבוא&quot;
+                            כדי להכניס את כל האירועים לקלנדר.
                           </p>
                           <img
                             src="/gcal-step-7.png"
-                            alt="טופס ייבוא לאחר בחירת קובץ ולוח שנה, כפתור 'ייבוא' מסומן"
+                            alt='טופס ייבוא לאחר בחירת קובץ ולוח שנה, כפתור "ייבוא" מסומן'
                           />
                         </li>
 
                         <li>
                           <strong>מסך הבית עם האירועים החדשים.</strong>
                           <p className="small muted">
-                            חזור/י למסך הבית של Google Calendar, ודא/י שלוח השנה החדש מסומן
-                            בצד שמאל, ובדוק/י שהאירועים מהקובץ מופיעים בימים ובשעות שנקבעו
+                            חזור/י למסך הבית של Google Calendar, ודא/י שלוח השנה החדש מסומן בצד
+                            שמאל, ובדוק/י שהאירועים מהקובץ מופיעים בימים ובשעות שנקבעו
                             באפליקציה.
                           </p>
                           <img
@@ -1857,7 +2012,7 @@ const App: React.FC = () => {
                 {result && (
                   <>
                     <div className="summary-row">
-                      <span>סה"כ אירועים: {result.events.length}</span>
+                      <span>סה&quot;כ אירועים: {result.events.length}</span>
                       <span>מספר מטלות: {assignments.length}</span>
                       {result.unscheduled.length > 0 && (
                         <span>מטלות שלא שובצו: {result.unscheduled.length}</span>
@@ -1866,6 +2021,29 @@ const App: React.FC = () => {
                         <span>יש לאשר את הלו״ז לפני הורדה.</span>
                       )}
                     </div>
+
+                    {courseSummary.length > 0 && (
+                      <div className="course-summary">
+                        <h3 className="course-summary-title">חלוקת זמן לפי קורס</h3>
+                        <div className="course-summary-grid">
+                          {courseSummary.map((c) => (
+                            <div key={c.course} className="course-summary-card">
+                              <div className="course-summary-course">{c.course}</div>
+                              <div className="course-summary-line">
+                                סה&quot;כ שעות משובצות:{" "}
+                                {Number((c.totalMinutes / 60).toFixed(1))}
+                              </div>
+                              <div className="course-summary-line">
+                                ימים שונים בלו״ז: {c.distinctDays}
+                              </div>
+                              <div className="course-summary-line">
+                                מספר בלוקים למטלות הקורס: {c.taskEvents}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {result.unscheduled.length > 0 && (
                       <div className="warning-box">
@@ -1936,8 +2114,8 @@ const App: React.FC = () => {
 
                 {!result && (
                   <div className="info-box">
-                    כדי לראות תוצאה, ודא/י שהזנת מטלות ואילוצים ולאחר מכן לחץ/י על הכפתור יצירת
-                    לו״ז. לאחר מכן יש לאשר את הלו״ז ורק אז להוריד קובץ ICS.
+                    כדי לראות תוצאה, ודא/י שהזנת מטלות ואילוצים ולאחר מכן לחץ/י על הכפתור
+                    יצירת לו״ז. לאחר מכן יש לאשר את הלו״ז ורק אז להוריד קובץ ICS.
                   </div>
                 )}
 
