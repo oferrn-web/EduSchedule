@@ -1101,18 +1101,23 @@ const App: React.FC = () => {
   };
 
   const handleGenerate = () => {
+    // נקה מצב קודם באופן מפורש לפני יצירת לו״ז חדש
     setError(null);
     setScheduleApproved(false);
+    setHasDownloadedOnce(false);
+    setResult(null);
+    setIcsContent(null);
 
     const hasValid = assignments.some(
       (a) => a.title.trim() && a.deadline && a.estimatedHours > 0
     );
+
     if (!hasValid) {
-      setResult(null);
-      setIcsContent(null);
       setError("יש להזין לפחות מטלה אחת עם דדליין ושעות משוערות.");
       return;
     }
+
+    // יצירת הלו״ז מחדש לפי ההגדרות והמטלות העדכניות
     const schedule = generateSchedule(
       assignments,
       weeklyObligations,
@@ -1120,13 +1125,16 @@ const App: React.FC = () => {
       dailyObligations,
       settings
     );
+
     setResult(schedule);
+
     if (!schedule.events.length) {
-      setIcsContent(null);
       setError("לא נוצרו בלוקים. עדכן/י שעות עבודה, אילוצים או דדליינים.");
-    } else {
-      setIcsContent(buildIcs(schedule.events, settings.timezone));
+      return;
     }
+
+    const ics = buildIcs(schedule.events, settings.timezone);
+    setIcsContent(ics);
   };
 
   const handleDownloadIcs = () => {
