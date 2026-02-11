@@ -84,7 +84,8 @@ type SubtaskPhase = {
 type InternalTask = AssignmentRow & {
   deadlineDate: Date;
   remainingMinutes: number;
-  subtasks: SubtaskPhase[];
+  subtasks: string[];
+  nextSubIndex: number;
 };
 
 const weekdayLabels: { value: number; label: string }[] = [
@@ -406,22 +407,39 @@ function parseSubtaskPhases(
   return phases;
 }
 
-function getCurrentSubtaskRemaining(t: InternalTask): number {
-  if (!t.subtasks.length) return t.remainingMinutes;
-  const current = t.subtasks.find((s) => s.remainingMinutes > 0);
-  return current ? current.remainingMinutes : 0;
-}
+// עטיפת תאימות: המרת שלבי־תת־משימה עשירים (SubtaskPhase)
+// לרשימת תוויות טקסטואליות בלבד, כפי שהמתזמן מצפה (string[])
+function parseSubtaskLabels(
+  notes: string,
+  estimatedHours: number,
+  title: string
+): string[] {
+  // נניח ש־parseSubtaskPhases מחזירה SubtaskPhase[]
+  const phases = (parseSubtaskPhases as any)(notes, estimatedHours, title);
 
-function getCurrentSubtaskLabelAndIndex(
-  t: InternalTask
-): { label: string; index: number } | null {
-  if (!t.subtasks.length) return null;
-  for (let i = 0; i < t.subtasks.length; i += 1) {
-    if (t.subtasks[i].remainingMinutes > 0) {
-      return { label: t.subtasks[i].label, index: i };
-    }
+  if (!Array.isArray(phases)) {
+    return [];
   }
-  return null;
+
+  const labels = phases
+    .map((p: any) => {
+      if (typeof p === "string") {
+        // במקרה שמישהו שינה את המימוש להחזיר מחרוזות
+        return p.trim();
+      }
+      if (p && typeof p.label === "string") {
+        return p.label.trim();
+      }
+      return "";
+    })
+    .filter((label: string) => label.length > 0);
+
+  // אם משום מה אין תוויות, נ fallback למבנה הישן
+  if (labels.length === 0) {
+    return proposeSubtasks(estimatedHours, title);
+  }
+
+  return labels;
 }
 
 function getEventDurationMinutes(ev: ScheduledEvent): number {
@@ -457,23 +475,20 @@ function generateSchedule(
     .filter((a) => a.title.trim() && a.estimatedHours > 0 && a.deadline)
     .map((a) => {
       const deadlineDate = new Date(a.deadline + "T23:59:00");
-      const subtasks = parseSubtaskPhases(a.notes, a.estimatedHours, a.title);
-      const totalMinutesFromSubtasks = subtasks.reduce(
-        (sum, s) => sum + s.plannedMinutes,
-        0
-      );
-      const fallbackMinutes =
-        totalMinutesFromSubtasks > 0
-          ? totalMinutesFromSubtasks
-          : Math.round(a.estimatedHours * 60);
+      const remainingMinutes = Math.round(a.estimatedHours * 60);
+      const subtasks = parseSubtaskLabels(a.notes, a.estimatedHours, a.title);
       return {
         ...a,
         deadlineDate,
-        remainingMinutes: fallbackMinutes,
+        remainingMinutes,
         subtasks,
+        nextSubIndex: 0,
       };
     })
-    .filter((a) => !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0);
+    .filter(
+      (a) =>
+        !Number.isNaN(a.deadlineDate.getTime()) && a.remainingMinutes > 0
+    );
 
   if (!tasks.length) {
     return { events: [], unscheduled: [] };
@@ -491,7 +506,9 @@ function generateSchedule(
   });
 
   const startDateObj = cloneDateOnly(
-    settings.startDate ? new Date(settings.startDate + "T00:00:00") : new Date()
+    settings.startDate
+      ? new Date(settings.startDate + "T00:00:00")
+      : new Date()
   );
 
   let maxDeadline = cloneDateOnly(tasks[0].deadlineDate);
@@ -502,12 +519,21 @@ function generateSchedule(
 
   const dailyMaxMinutes = Math.round(settings.dailyMaxHours * 60);
   const maxTaskMinutesPerDay = Math.round(settings.maxTaskHoursPerDay * 60);
-  const blockMinutes = Math.max(15, Math.min(240, Math.round(settings.blockMinutes)));
-  const breakMinutes = Math.max(0, Math.min(60, Math.round(settings.breakMinutes)));
+  const blockMinutes = Math.max(
+    15,
+    Math.min(240, Math.round(settings.blockMinutes))
+  );
+  const breakMinutes = Math.max(
+    0,
+    Math.min(60, Math.round(settings.breakMinutes))
+  );
   const bufferMinutes = Math.max(0, Math.round(settings.bufferHours * 60));
 
   const ratio = getLoadRatio(settings.loadMode || "medium");
-  const effectiveDailyMinutes = Math.max(30, Math.round(dailyMaxMinutes * ratio));
+  const effectiveDailyMinutes = Math.max(
+    30,
+    Math.round(dailyMaxMinutes * ratio)
+  );
   const effectiveTaskMinutesPerDay = Math.max(
     15,
     Math.round(maxTaskMinutesPerDay * ratio)
@@ -518,9 +544,11 @@ function generateSchedule(
   const perTaskPerDayMinutes: Record<string, number> = {};
 
   function addStudyMinutes(dayKey: string, taskId: string, minutes: number) {
-    perDayStudyMinutes[dayKey] = (perDayStudyMinutes[dayKey] || 0) + minutes;
+    perDayStudyMinutes[dayKey] =
+      (perDayStudyMinutes[dayKey] || 0) + minutes;
     const key = `${taskId}__${dayKey}`;
-    perTaskPerDayMinutes[key] = (perTaskPerDayMinutes[key] || 0) + minutes;
+    perTaskPerDayMinutes[key] =
+      (perTaskPerDayMinutes[key] || 0) + minutes;
   }
 
   function getStudyMinutes(dayKey: string): number {
@@ -543,12 +571,17 @@ function generateSchedule(
     specificByDate[o.date].push(o);
   });
 
-  const workStartMinutes = parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
-  const workEndMinutes = parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
+  const workStartMinutes =
+    parseTimeToMinutes(settings.workdayStart) ?? 8 * 60;
+  const workEndMinutes =
+    parseTimeToMinutes(settings.workdayEnd) ?? 20 * 60;
   const workingWeek = new Set(settings.workingWeekdays);
 
   const dayCount =
-    Math.round((maxDeadline.getTime() - startDateObj.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    Math.round(
+      (maxDeadline.getTime() - startDateObj.getTime()) /
+        (24 * 60 * 60 * 1000)
+    ) + 1;
 
   // count how many working days exist in the whole range
   let totalWorkingDays = 0;
@@ -570,7 +603,7 @@ function generateSchedule(
     const weekBlocked = weeklyByDay[weekday] || [];
     const specificBlocked = specificByDate[dKey] || [];
 
-    // obligations as events
+    // add obligations to events, for visibility
     weekBlocked.forEach((o) => {
       const sMin = parseTimeToMinutes(o.startTime);
       const eMin = parseTimeToMinutes(o.endTime);
@@ -581,8 +614,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ שבועי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ שבועי קבוע",
           course: undefined,
         });
@@ -599,8 +636,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ בתאריך",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ חד פעמי",
           course: undefined,
         });
@@ -618,8 +659,12 @@ function generateSchedule(
           id: generateId("obl"),
           kind: "obligation",
           title: o.label || "אילוץ יומי",
-          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(sDt.getMinutes())}`,
-          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(eDt.getMinutes())}`,
+          start: `${dKey}T${pad2(sDt.getHours())}:${pad2(
+            sDt.getMinutes()
+          )}`,
+          end: `${dKey}T${pad2(eDt.getHours())}:${pad2(
+            eDt.getMinutes()
+          )}`,
           notes: "אילוץ יומי קבוע",
           course: undefined,
         });
@@ -628,20 +673,46 @@ function generateSchedule(
 
     if (!workingWeek.has(weekday)) continue;
 
-    const remainingMinutesAll = tasks.reduce((sum, t) => sum + t.remainingMinutes, 0);
+    // dynamic daily budget based on remaining work and remaining working days,
+    // with "cram" behavior when there is risk of not finishing on time
+    const remainingMinutesAll = tasks.reduce(
+      (sum, t) => sum + t.remainingMinutes,
+      0
+    );
     if (remainingMinutesAll <= 0) break;
 
     const remainingWorkingDays = totalWorkingDays - workingDayIndex;
     if (remainingWorkingDays <= 0) break;
 
     const idealPerDay = remainingMinutesAll / remainingWorkingDays;
+
     const mode = settings.loadMode || "medium";
     const spreadMultiplier =
-      mode === "relaxed" ? 0.8 : mode === "marathon" ? 1.3 : 1.0;
+      mode === "relaxed" ? 0.75 : mode === "marathon" ? 1.4 : 1.0;
 
-    let dailyBudgetMinutes = Math.floor(
-      Math.min(effectiveDailyMinutes, idealPerDay * spreadMultiplier)
-    );
+    const baseTarget = idealPerDay * spreadMultiplier;
+
+    const riskRatio =
+      effectiveDailyMinutes > 0
+        ? remainingMinutesAll /
+          (remainingWorkingDays * effectiveDailyMinutes)
+        : 0;
+
+    let dailyBudgetMinutes: number;
+
+    if (riskRatio >= 1) {
+      // we already need at least the full daily capacity
+      // to finish on time -> "cram" behavior
+      dailyBudgetMinutes = effectiveDailyMinutes;
+    } else {
+      // otherwise keep a floor so we do not under-allocate early days
+      const minFloor = effectiveDailyMinutes * 0.5;
+      dailyBudgetMinutes = Math.min(
+        effectiveDailyMinutes,
+        Math.max(baseTarget, minFloor)
+      );
+    }
+
     if (dailyBudgetMinutes < blockMinutes) {
       dailyBudgetMinutes = blockMinutes;
     }
@@ -708,18 +779,15 @@ function generateSchedule(
           const taskDayStudied = getTaskDayMinutes(t.id, dKey);
           if (taskDayStudied >= effectiveTaskMinutesPerDay) continue;
 
-          const subRemaining = getCurrentSubtaskRemaining(t);
-          if (subRemaining <= 0 && t.subtasks.length > 0) continue;
-
-          const allocCandidate = Math.min(
-            baseBlock,
-            t.remainingMinutes,
-            subRemaining > 0 ? subRemaining : baseBlock
-          );
+          const allocCandidate = Math.min(baseBlock, t.remainingMinutes);
           if (allocCandidate < 10) continue;
 
           if (dayStudied + allocCandidate > dailyBudgetMinutes) continue;
-          if (taskDayStudied + allocCandidate > effectiveTaskMinutesPerDay) continue;
+          if (
+            taskDayStudied + allocCandidate >
+            effectiveTaskMinutesPerDay
+          )
+            continue;
 
           const slotEndDtCandidate = buildLocalDateTime(
             currentDate,
@@ -728,21 +796,29 @@ function generateSchedule(
           const deadlineWithBuffer = new Date(
             t.deadlineDate.getTime() - bufferMinutes * 60 * 1000
           );
-          if (slotEndDtCandidate.getTime() > deadlineWithBuffer.getTime()) continue;
+          if (
+            slotEndDtCandidate.getTime() >
+            deadlineWithBuffer.getTime()
+          )
+            continue;
 
           candidateIndices.push(i);
         }
 
         if (!candidateIndices.length) break;
 
+        // urgency + priority + remaining work + diversity
         const scored = candidateIndices.map((idx) => {
           const t = tasks[idx];
-          const msDiff = t.deadlineDate.getTime() - currentDate.getTime();
+          const msDiff =
+            t.deadlineDate.getTime() - currentDate.getTime();
           const daysDiff = msDiff / (1000 * 60 * 60 * 24);
-          const urgency = daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
+          const urgency =
+            daysDiff <= 0 ? 10 : Math.min(10, 10 / daysDiff);
           const priorityScore = t.priority;
           const remainingBlocks = t.remainingMinutes / blockMinutes;
-          const scoreBase = urgency * 2 + priorityScore + remainingBlocks * 0.1;
+          const scoreBase =
+            urgency * 2 + priorityScore + remainingBlocks * 0.1;
           const diversityPenalty =
             lastTaskIdForDay && t.id === lastTaskIdForDay ? 0.5 : 1;
           return { idx, score: scoreBase * diversityPenalty };
@@ -756,39 +832,44 @@ function generateSchedule(
           scored.length > 1 &&
           tasks[chosenIndex].id === lastTaskIdForDay
         ) {
-          const alternative = scored.find((s) => tasks[s.idx].id !== lastTaskIdForDay);
+          const alternative = scored.find(
+            (s) => tasks[s.idx].id !== lastTaskIdForDay
+          );
           if (alternative) {
             chosenIndex = alternative.idx;
           }
         }
 
         const task = tasks[chosenIndex];
-
-        const currentPhase = getCurrentSubtaskLabelAndIndex(task);
-        const subRemaining =
-          currentPhase && task.subtasks[currentPhase.index]
-            ? task.subtasks[currentPhase.index].remainingMinutes
-            : 0;
-
-        const alloc = Math.min(
-          baseBlock,
-          task.remainingMinutes,
-          subRemaining > 0 ? subRemaining : baseBlock
+        const alloc = Math.min(baseBlock, task.remainingMinutes);
+        const slotStartDt = buildLocalDateTime(currentDate, cursor);
+        const slotEndDt = buildLocalDateTime(
+          currentDate,
+          cursor + alloc
         );
 
-        const slotStartDt = buildLocalDateTime(currentDate, cursor);
-        const slotEndDt = buildLocalDateTime(currentDate, cursor + alloc);
-
-        const startStr = `${dKey}T${pad2(slotStartDt.getHours())}:${pad2(
-          slotStartDt.getMinutes()
-        )}`;
+        const startStr = `${dKey}T${pad2(
+          slotStartDt.getHours()
+        )}:${pad2(slotStartDt.getMinutes())}`;
         const endStr = `${dKey}T${pad2(slotEndDt.getHours())}:${pad2(
           slotEndDt.getMinutes()
         )}`;
 
-        const subtaskLabel = currentPhase ? currentPhase.label : "";
-        const titleBase = `${task.course ? task.course + " • " : ""}${task.title}`;
-        const fullTitle = subtaskLabel ? `${titleBase} – ${subtaskLabel}` : titleBase;
+        const subtaskLabel =
+          task.subtasks.length > 0
+            ? task.subtasks[task.nextSubIndex]
+            : "";
+        if (task.subtasks.length > 0) {
+          task.nextSubIndex =
+            (task.nextSubIndex + 1) % task.subtasks.length;
+        }
+
+        const titleBase = `${
+          task.course ? task.course + " • " : ""
+        }${task.title}`;
+        const fullTitle = subtaskLabel
+          ? `${titleBase} – ${subtaskLabel}`
+          : titleBase;
 
         const notesParts = [
           `דדליין: ${task.deadline.replace(/-/g, "/")}`,
@@ -814,10 +895,6 @@ function generateSchedule(
         });
 
         task.remainingMinutes -= alloc;
-        if (currentPhase) {
-          const phase = task.subtasks[currentPhase.index];
-          phase.remainingMinutes = Math.max(0, phase.remainingMinutes - alloc);
-        }
         addStudyMinutes(dKey, task.id, alloc);
         lastTaskIdForDay = task.id;
         cursor += alloc + breakMinutes;
@@ -832,7 +909,9 @@ function generateSchedule(
       remainingHours: Number((t.remainingMinutes / 60).toFixed(1)),
     }));
 
-  events.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  events.sort((a, b) =>
+    a.start < b.start ? -1 : a.start > b.start ? 1 : 0
+  );
 
   return { events, unscheduled };
 }
@@ -1372,14 +1451,15 @@ const App: React.FC = () => {
                 <div className="advanced-toggle-row">
                   <button
                     type="button"
-                    className="secondary advanced-toggle"
-                    onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                    className={`secondary advanced-toggle ${
+                      showAdvancedSettings ? "advanced-toggle-open" : ""
+                    }`}
+                    onClick={() => setShowAdvancedSettings((prev: boolean) => !prev)}
                   >
                     <Settings2 size={14} />
-                    {showAdvancedSettings
-                      ? "הסתר הגדרות מתקדמות"
-                      : "הצג הגדרות מתקדמות (בלוקים, מרווח ביטחון ועוד)"}
+                    {showAdvancedSettings ? "הסתר הגדרות מתקדמות" : "הצגת הגדרות מתקדמות"}
                   </button>
+
                 </div>
 
                 {showAdvancedSettings && (

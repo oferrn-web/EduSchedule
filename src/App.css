@@ -309,6 +309,28 @@ button {
   cursor: default;
 }
 
+/* advanced settings toggle */
+
+.advanced-toggle {
+  border-color: var(--accent);
+  background: rgba(14, 165, 233, 0.12);
+  color: var(--text);
+  font-weight: 600;
+  padding-inline: 16px;
+}
+
+.advanced-toggle:hover {
+  border-color: var(--accent-2);
+  background: rgba(34, 197, 94, 0.15);
+}
+
+/* slightly stronger state when accordion is open */
+.advanced-toggle-open {
+  border-color: var(--accent-2);
+  background: rgba(34, 197, 94, 0.18);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4);
+}
+
 .danger-icon {
   background: var(--danger-soft);
   border: none;
